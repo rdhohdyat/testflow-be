@@ -85,15 +85,19 @@ def generate_execution_paths(cfg):
     # F. Pemetaan ID Node ke Nomor Baris
     # ---------------------------------------------------------------
     # Mengambil data nomor baris dari setiap node untuk tampilan akhir.
-    node_to_line: dict = {}
+    node_to_lines: dict = {}
     for node in nodes:
         nid  = node["id"]
         data = node.get("data", {})
-        if data.get("lineno"):
-            node_to_line[nid] = data["lineno"]
+        
+        # Jika node hasil condense (punya banyak baris)
+        if data.get("linenos"):
+            node_to_lines[nid] = data["linenos"]
+        elif data.get("lineno"):
+            node_to_lines[nid] = [data["lineno"]]
         else:
             # Jika tidak ada nomor baris (misal 'Start'/'End'), gunakan labelnya
-            node_to_line[nid] = data.get("label", "")
+            node_to_lines[nid] = [data.get("label", "")]
 
     # ---------------------------------------------------------------
     # G. Tentukan Node Awal, Akhir, dan Hitung Cyclomatic Complexity
@@ -183,12 +187,13 @@ def generate_execution_paths(cfg):
     for node_path in all_raw_paths:
         line_path = []
         for nid in node_path:
-            line = node_to_line.get(nid)
-            if (line is not None
-                    and line not in SKIP_LABELS
-                    and (isinstance(line, int)
-                         or (isinstance(line, str) and str(line).isdigit()))):
-                line_path.append(str(line))
+            lines = node_to_lines.get(nid, [])
+            for line in lines:
+                if (line is not None
+                        and line not in SKIP_LABELS
+                        and (isinstance(line, int)
+                             or (isinstance(line, str) and str(line).isdigit()))):
+                    line_path.append(str(line))
 
         if not line_path:
             continue

@@ -1,10 +1,114 @@
 import ast
 from typing import List, Dict, Any, Tuple, Set, Optional, Union
 
+def condense_cfg(nodes, edges):
+    """
+    Groups sequential nodes (chains) into a single display node.
+    Example: 1 -> 2 -> 3 becomes [1-3].
+    Condition: 
+    - u has exactly one outgoing edge (to v)
+    - v has exactly one incoming edge (from u)
+    - Both are simple statements (no branching/looping types)
+    """
+    if not nodes:
+        return nodes, edges
+
+    # Mapping for quick lookup
+    nodes_dict = {n["id"]: n for n in nodes}
+    
+    # Types that are safe to merge
+    MERGEABLE_TYPES = {"statement", "assignment", "expression", "call", "default"}
+
+    def get_adj_maps(current_edges):
+        out_map = {}
+        in_map = {}
+        for e in current_edges:
+            s, t = e["source"], e["target"]
+            out_map.setdefault(s, []).append(t)
+            in_map.setdefault(t, []).append(s)
+        return out_map, in_map
+
+    modified = True
+    while modified:
+        modified = False
+        out_map, in_map = get_adj_maps(edges)
+        
+        for e in edges:
+            u_id, v_id = e["source"], e["target"]
+            
+            # 1. Check if u and v exist
+            if u_id not in nodes_dict or v_id not in nodes_dict:
+                continue
+                
+            u = nodes_dict[u_id]
+            v = nodes_dict[v_id]
+            
+            # 2. Check sequential integrity
+            # u must have ONLY ONE outgoing edge (to v)
+            if len(out_map.get(u_id, [])) != 1 or out_map[u_id][0] != v_id:
+                continue
+            # v must have ONLY ONE incoming edge (from u)
+            if len(in_map.get(v_id, [])) != 1 or in_map[v_id][0] != u_id:
+                continue
+                
+            # 3. Check types
+            u_type = u["data"].get("node_type")
+            v_type = v["data"].get("node_type")
+            if u_type not in MERGEABLE_TYPES or v_type not in MERGEABLE_TYPES:
+                continue
+                
+            # 4. Check labels on the edge
+            if e.get("label"): # Don't merge if there's a label (e.g., True/False/loop back)
+                continue
+                
+            # 5. Check if they have line numbers
+            u_line = u["data"].get("lineno")
+            v_line = v["data"].get("lineno")
+            if u_line is None or v_line is None:
+                continue
+
+            # PERFORM MERGE
+            # Update line numbers track
+            u_lines = u["data"].get("linenos")
+            if u_lines is None:
+                u_lines = [u_line]
+            
+            v_lines = v["data"].get("linenos")
+            if v_lines is None:
+                v_lines = [v_line]
+                
+            combined_lines = u_lines + v_lines
+            u["data"]["linenos"] = combined_lines
+            u["data"]["label"] = f"{combined_lines[0]} - {combined_lines[-1]}"
+            u["data"]["tooltip"] = u["data"]["tooltip"] + "\n" + v["data"]["tooltip"]
+            
+            # Remove the edge u -> v
+            edges = [edge for edge in edges if not (edge["source"] == u_id and edge["target"] == v_id)]
+            
+            # Redirect all edges coming OUT of v to come OUT of u instead
+            for edge in edges:
+                if edge["source"] == v_id:
+                    edge["source"] = u_id
+                    # Update edge ID to be unique
+                    edge["id"] = f"e{edge['source']}-{edge['target']}"
+            
+            # Remove node v
+            nodes = [n for n in nodes if n["id"] != v_id]
+            del nodes_dict[v_id]
+            
+            modified = True
+            break # Re-calculate maps for next iteration
+            
+    return nodes, edges
+
 def build_cfg(code: str):
     try:
         tree = ast.parse(code)
         nodes, edges, parameters = extract_cfg(tree)
+        
+        # Post-process to condense sequential nodes
+        nodes, edges = condense_cfg(nodes, edges)
+        
         return {
             "nodes": nodes,
             "edges": edges,
@@ -12,6 +116,7 @@ def build_cfg(code: str):
         }
     except Exception as e:
         return {"message": f"Error parsing code: {str(e)}"}
+
 
 def get_operator_symbol(op):
     """Convert AST operator to symbol"""
